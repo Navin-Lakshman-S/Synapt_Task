@@ -2,3 +2,5 @@
 .vscode/
 fg.txt
 ding.sh
+
+.env
