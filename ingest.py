@@ -1,88 +1,133 @@
-# ingest.py — Ingests PDF documents into a FAISS vector index.
-# Run this ONCE after placing PDFs in data/docs/.
-# Run: python ingest.py
-#
-# This script is a placeholder that shows exactly how ingestion works.
-# It will run with mock data now. With real PDFs + sentence-transformers installed,
-# it builds a real FAISS index.
+# ingest.py — Ingests PDFs from data/docs/ into a FAISS vector index.
+# Run ONCE after placing PDFs in data/docs/.
+# Run: venv/bin/python ingest.py
 
 import os
 import sys
 import pickle
+import re
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 
-def ingest_mock():
-    """
-    Simulate ingestion with mock chunks.
-    Replace this with real PDF loading once you have the annual report PDFs.
-    """
-    print("Running mock ingestion (no PDFs found in data/docs/)...")
+def clean_text(text: str) -> str:
+    """Remove noise: excessive whitespace, page numbers, headers/footers."""
+    # Collapse multiple newlines/spaces
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    # Remove lines that are just numbers (page numbers)
+    text = re.sub(r'^\s*\d+\s*$', '', text, flags=re.MULTILINE)
+    return text.strip()
 
-    mock_chunks = [
-        {"text": "Infosys reported strong growth in digital services in FY24.", "source": "Infosys_AR_FY24.pdf", "page": 47},
-        {"text": "TCS margin improvement driven by operational efficiency in FY24.", "source": "TCS_AR_FY24.pdf", "page": 62},
-        {"text": "Wipro strategic priorities include AI and BFSI vertical expansion.", "source": "Wipro_AR_FY24.pdf", "page": 38},
-    ]
+
+def chunk_text(text: str, source: str, page: int, chunk_size: int = 500, overlap: int = 50) -> list[dict]:
+    """Split a page's text into overlapping chunks."""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end].strip()
+        # Skip chunks that are too short — likely noise
+        if len(chunk) > 100:
+            chunks.append({"text": chunk, "source": source, "page": page})
+        start += chunk_size - overlap
+    return chunks
+
+
+def ingest():
+    docs_dir = "data/docs"
+    pdfs = [f for f in os.listdir(docs_dir) if f.endswith(".pdf")]
+
+    if not pdfs:
+        print("No PDFs found in data/docs/. Exiting.")
+        return
+
+    print(f"Found {len(pdfs)} PDFs: {pdfs}")
+
+    from pypdf import PdfReader
+    from sentence_transformers import SentenceTransformer
+    import faiss
+    import numpy as np
+
+    print("Loading embedding model (all-MiniLM-L6-v2)...")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    all_chunks = []
+
+    for pdf_file in pdfs:
+        path = os.path.join(docs_dir, pdf_file)
+        print(f"\nProcessing: {pdf_file}")
+        try:
+            reader = PdfReader(path)
+            total_pages = len(reader.pages)
+            print(f"  Pages: {total_pages}")
+            file_chunks = 0
+
+            for page_num, page in enumerate(reader.pages, 1):
+                try:
+                    text = page.extract_text()
+                except Exception:
+                    continue
+
+                if not text or len(text.strip()) < 100:
+                    # Skip near-empty pages (covers, TOC entries, etc.)
+                    continue
+
+                text = clean_text(text)
+                chunks = chunk_text(text, source=pdf_file, page=page_num)
+                all_chunks.extend(chunks)
+                file_chunks += len(chunks)
+
+            print(f"  Chunks extracted: {file_chunks}")
+
+        except Exception as e:
+            print(f"  ERROR reading {pdf_file}: {e}")
+
+    if not all_chunks:
+        print("No chunks extracted. Check your PDFs.")
+        return
+
+    print(f"\nTotal chunks: {len(all_chunks)}")
+    print("Building embeddings (this takes a few minutes)...")
+
+    texts = [c["text"] for c in all_chunks]
+    embeddings = model.encode(texts, show_progress_bar=True, batch_size=64)
+
+    print("Building FAISS index...")
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embeddings.astype("float32"))
 
     os.makedirs("data", exist_ok=True)
+    faiss.write_index(index, "data/faiss_index.bin")
     with open("data/chunks_metadata.pkl", "wb") as f:
-        pickle.dump(mock_chunks, f)
+        pickle.dump(all_chunks, f)
 
-    print(f"Mock index created with {len(mock_chunks)} chunks.")
-    print("To use real PDFs: place them in data/docs/ and run ingest.py again.")
+    print(f"\nDone.")
+    print(f"  FAISS index  → data/faiss_index.bin ({index.ntotal} vectors)")
+    print(f"  Metadata     → data/chunks_metadata.pkl ({len(all_chunks)} chunks)")
+    print("\nVerifying retrieval quality...")
+    _verify(model, index, all_chunks)
 
 
-def ingest_real():
-    """
-    Real ingestion pipeline. Uncomment and use once you have:
-    - PDFs in data/docs/
-    - pip install sentence-transformers faiss-cpu pypdf
-    """
-    # from pypdf import PdfReader
-    # from sentence_transformers import SentenceTransformer
-    # import faiss, numpy as np
-    #
-    # model = SentenceTransformer("all-MiniLM-L6-v2")
-    # chunks = []
-    #
-    # for pdf_file in os.listdir("data/docs"):
-    #     if not pdf_file.endswith(".pdf"):
-    #         continue
-    #     reader = PdfReader(f"data/docs/{pdf_file}")
-    #     for page_num, page in enumerate(reader.pages, 1):
-    #         text = page.extract_text()
-    #         if not text or len(text.strip()) < 50:
-    #             continue
-    #         # Split page into ~500 char chunks with 50 char overlap
-    #         for i in range(0, len(text), 450):
-    #             chunk_text = text[i:i+500].strip()
-    #             if chunk_text:
-    #                 chunks.append({"text": chunk_text, "source": pdf_file, "page": page_num})
-    #
-    # print(f"Extracted {len(chunks)} chunks from PDFs.")
-    #
-    # # Build FAISS index
-    # embeddings = model.encode([c["text"] for c in chunks], show_progress_bar=True)
-    # index = faiss.IndexFlatL2(embeddings.shape[1])
-    # index.add(np.array(embeddings, dtype="float32"))
-    #
-    # os.makedirs("data", exist_ok=True)
-    # faiss.write_index(index, "data/faiss_index.bin")
-    # with open("data/chunks_metadata.pkl", "wb") as f:
-    #     pickle.dump(chunks, f)
-    #
-    # print(f"FAISS index saved to data/faiss_index.bin")
-    pass
+def _verify(model, index, chunks):
+    """Run 5 test queries and print top result — manual quality check."""
+    import numpy as np
+    test_queries = [
+        "operating margin improvement reasons",
+        "revenue growth digital services",
+        "headcount employees workforce",
+        "strategic priorities AI cloud",
+        "management commentary FY24 outlook",
+    ]
+    for q in test_queries:
+        vec = model.encode([q]).astype("float32")
+        _, indices = index.search(vec, k=1)
+        top = chunks[indices[0][0]]
+        print(f"\n  Query: '{q}'")
+        print(f"  Top chunk: [{top['source']} p.{top['page']}]")
+        print(f"  Text: {top['text'][:120]}...")
 
 
 if __name__ == "__main__":
-    docs_dir = "data/docs"
-    has_pdfs = os.path.isdir(docs_dir) and any(f.endswith(".pdf") for f in os.listdir(docs_dir))
-
-    if has_pdfs:
-        print("PDFs found. Running real ingestion...")
-        ingest_real()
-    else:
-        ingest_mock()
+    ingest()
