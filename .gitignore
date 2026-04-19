@@ -1,6 +1,20 @@
-.vscode
 .vscode/
+.kiro/
+
 fg.txt
 ding.sh
 
 .env
+
+# Python virtual environment
+venv/
+
+# Compiled Python
+__pycache__/
+*.pyc
+
+# Generated binary artifacts — reproducible via scripts
+data/
+
+# Trace outputs — generated at runtime
+traces/
