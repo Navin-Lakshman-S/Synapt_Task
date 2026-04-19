@@ -1,15 +1,14 @@
-# Core — required now
+# Core — all required now
 pandas>=2.0.0
 python-dotenv>=1.0.0
 tavily-python>=0.3.0
+google-genai>=1.0.0
 
-# ── Uncomment when ready ───────────────────────────────────────────────────────
+# Vector store + PDF ingestion
+faiss-cpu>=1.7.4
+sentence-transformers>=2.2.2
+pypdf>=3.0.0
 
-# Vector store + embeddings (for real PDF ingestion)
-# faiss-cpu>=1.7.4
-# sentence-transformers>=2.2.2
-# pypdf>=3.0.0
-
-# LLM providers (pick one)
+# ── Optional LLM providers ─────────────────────────────────────────────────────
 # openai>=1.0.0
 # anthropic>=0.20.0
