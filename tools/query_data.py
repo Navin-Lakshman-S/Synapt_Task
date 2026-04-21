@@ -4,6 +4,7 @@
 
 import sqlite3
 import os
+import re
 from utils.types import ToolResult
 
 # ── Tool metadata ──────────────────────────────────────────────────────────────
@@ -30,10 +31,59 @@ def _get_connection() -> sqlite3.Connection:
     )
 
 
-def _nl_to_sql(query: str) -> str:
+_SCHEMA_DESCRIPTION = """Table: financials
+Columns:
+  id INTEGER PRIMARY KEY AUTOINCREMENT
+  company TEXT  -- values: 'Infosys', 'TCS', 'Wipro'
+  fiscal_year TEXT  -- annual: 'FY15'–'FY24'; quarterly: 'Q1FY22'–'Q4FY24'
+  type TEXT  -- 'annual' or 'quarterly'
+  revenue_cr REAL
+  expenses_cr REAL
+  operating_profit_cr REAL
+  opm_pct REAL  -- operating margin percentage
+  other_income_cr REAL
+  depreciation_cr REAL
+  interest_cr REAL
+  net_profit_cr REAL
+  eps REAL
+  headcount INTEGER"""
+
+
+def _llm_nl_to_sql(query: str) -> str:
+    """
+    Use the LLM to translate a natural language question into a SQL SELECT statement.
+
+    Raises:
+        ValueError: if the response does not start with SELECT.
+    """
+    from agent.llm import call_llm
+
+    prompt = (
+        f"You are a SQL expert. Given the following table schema:\n\n"
+        f"{_SCHEMA_DESCRIPTION}\n\n"
+        f"Write a valid SQLite SELECT statement that answers this question:\n"
+        f"{query}\n\n"
+        f"Return ONLY the SQL statement. No markdown, no explanation, no code fences."
+    )
+
+    raw = call_llm(prompt, temperature=0.1)
+
+    # Strip markdown code fences
+    raw = re.sub(r"^```sql\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"^```\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    raw = raw.strip()
+
+    if not raw.upper().startswith("SELECT"):
+        raise ValueError(f"LLM returned a non-SELECT response: {raw!r}")
+
+    return raw
+
+
+def _rule_based_nl_to_sql(query: str) -> str:
     """
     Translate natural language to SQL against the financials table.
-    Rule-based for now — replace with LLM call when API key is available.
+    Rule-based fallback — used when GEMINI_API_KEY is not set or Gemini fails.
 
     Table schema:
         company, fiscal_year, type (annual/quarterly),
@@ -122,6 +172,19 @@ def _nl_to_sql(query: str) -> str:
     return f"SELECT {cols} FROM financials {where} ORDER BY company, fiscal_year"
 
 
+def _nl_to_sql(query: str) -> str:
+    """
+    Translate natural language to SQL.
+    Tries Gemini if GEMINI_API_KEY is set; falls back to rule-based on any exception.
+    """
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY"):
+        try:
+            return _llm_nl_to_sql(query)
+        except Exception:
+            pass
+    return _rule_based_nl_to_sql(query)
+
+
 def query_data(query: str) -> ToolResult:
     """
     Query the structured financials database using a natural language question.
@@ -166,6 +229,15 @@ def query_data(query: str) -> ToolResult:
             success=True,
         )
 
+    except sqlite3.Error as e:
+        return ToolResult(
+            tool_name=TOOL_NAME,
+            input_query=query,
+            output={},
+            source_citations=[],
+            success=False,
+            error=str(e),
+        )
     except Exception as e:
         return ToolResult(
             tool_name=TOOL_NAME,

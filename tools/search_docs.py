@@ -4,7 +4,17 @@
 
 import os
 import pickle
+from dotenv import load_dotenv
 from utils.types import ToolResult
+
+# Load .env early so HF_TOKEN is available before sentence-transformers imports
+load_dotenv()
+
+# Pass HF token to huggingface_hub if present — suppresses the unauthenticated warning
+_hf_token = os.getenv("HF_TOKEN")
+if _hf_token:
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = _hf_token
+    os.environ["HF_TOKEN"] = _hf_token
 
 # ── Tool metadata ──────────────────────────────────────────────────────────────
 TOOL_NAME = "search_docs"
