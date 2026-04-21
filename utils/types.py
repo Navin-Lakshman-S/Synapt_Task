@@ -46,3 +46,7 @@ class AgentResponse:
     trace: list[TraceStep]
     steps_used: int
     status: Literal["answered", "refused", "cap_reached"]
+    # Bonus fields — all optional so existing call sites are unaffected
+    plan: Optional[str] = None
+    reflection: Optional[str] = None
+    telemetry: dict = field(default_factory=dict)
