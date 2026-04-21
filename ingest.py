@@ -6,6 +6,13 @@ import os
 import sys
 import pickle
 import re
+from dotenv import load_dotenv
+
+# Load .env early so HF_TOKEN is set before sentence-transformers loads
+load_dotenv()
+_hf_token = os.getenv("HF_TOKEN")
+if _hf_token:
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = _hf_token
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -21,16 +28,35 @@ def clean_text(text: str) -> str:
 
 
 def chunk_text(text: str, source: str, page: int, chunk_size: int = 500, overlap: int = 50) -> list[dict]:
-    """Split a page's text into overlapping chunks."""
+    """Split a page's text into overlapping chunks, snapping to word boundaries."""
     chunks = []
     start = 0
-    while start < len(text):
+    text_len = len(text)
+
+    while start < text_len:
         end = start + chunk_size
+
+        # Snap end to the nearest word boundary (don't cut mid-word)
+        if end < text_len:
+            # Walk back from end until we hit a whitespace character
+            snap = end
+            while snap > start and not text[snap].isspace():
+                snap -= 1
+            # Only use the snapped position if we found whitespace
+            # (avoids infinite loop on a chunk with no spaces)
+            if snap > start:
+                end = snap
+
         chunk = text[start:end].strip()
-        # Skip chunks that are too short — likely noise
         if len(chunk) > 100:
             chunks.append({"text": chunk, "source": source, "page": page})
-        start += chunk_size - overlap
+
+        # Advance by (chunk_size - overlap), but also snap to word boundary
+        next_start = start + chunk_size - overlap
+        while next_start < text_len and not text[next_start].isspace():
+            next_start += 1
+        start = next_start
+
     return chunks
 
 
