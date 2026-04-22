@@ -1,6 +1,6 @@
 # decision_engine.py — The agent's brain.
-# Uses Gemini to decide which tool to call next (or whether to answer/refuse).
-# Falls back to rule-based routing if GEMINI_API_KEY is not set.
+# Routes questions to the right tool using call_llm() (Groq/Gemini with fallback).
+# Falls back to rule-based keyword routing if all LLM providers fail.
 
 import os
 import json
@@ -59,11 +59,12 @@ You have access to three tools:
 {tool_descriptions}
 
 Rules:
-1. If the question asks for investment advice, stock recommendations, or buy/sell decisions → REFUSE immediately, call no tools.
-2. If the question is trivial (math, greetings) → answer directly with no tool call.
-3. If you already have enough context to answer → compose the final answer.
-4. Otherwise → call the most appropriate tool.
-5. Never call the same tool twice for the same question unless the first call failed.
+1. REFUSE ONLY IF the question explicitly asks for investment advice, buy/sell recommendations, or price predictions. Example: "Should I buy TCS?" or "Which stock will go up?" → REFUSE.
+2. REFUSE if the question has absolutely no connection to Infosys, TCS, Wipro, Indian IT, or general knowledge.
+3. Questions about stock prices, financial data, EPS, revenue, margins, or company performance are ALLOWED — use query_data or web_search. Example: "Tell me about Infosys stocks" → use query_data + web_search.
+4. If the question is trivial (greetings, simple arithmetic) → answer directly with type="final" and no tool call.
+5. If you already have enough context to answer → compose the final answer.
+6. Otherwise → call the most appropriate tool. Never call the same tool twice unless the first call failed.
 
 Respond ONLY with valid JSON in this exact format:
 {{
@@ -92,8 +93,8 @@ def _build_prompt(question: str, context: list[dict]) -> str:
             if result.success:
                 output_str = str(result.output)
                 # Truncate long outputs to keep prompt manageable
-                if len(output_str) > 800:
-                    output_str = output_str[:800] + "... [truncated]"
+                if len(output_str) > 2000:
+                    output_str = output_str[:2000] + "... [truncated]"
                 prompt += f"Result: {output_str}\n"
             else:
                 prompt += f"Result: ERROR — {result.error}\n"
@@ -104,54 +105,38 @@ def _build_prompt(question: str, context: list[dict]) -> str:
     return prompt
 
 
-def _call_gemini(prompt: str) -> AgentAction:
-    """Call Gemini API and parse the JSON response into an AgentAction."""
-    import time
-    from google import genai
-    from google.genai import types
+def _call_llm(prompt: str) -> AgentAction:
+    """Call the LLM (with fallback) and parse the JSON response into an AgentAction."""
+    from agent.llm import call_llm, LLMUnavailableError
 
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    try:
+        raw = call_llm(prompt, temperature=0.1)
+    except LLMUnavailableError:
+        raise  # let decide_next_action catch this and fall back to rule-based
 
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.1),
-            )
-            raw = response.text.strip()
-            # Strip markdown code fences if Gemini wraps the JSON
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            raw = raw.strip()
-            data = json.loads(raw)
-            return AgentAction(
-                type=data.get("type", "refuse"),
-                tool_name=data.get("tool_name"),
-                input=data.get("input"),
-                reasoning=data.get("reasoning", ""),
-            )
-        except Exception as e:
-            err = str(e)
-            if "429" in err or "RESOURCE_EXHAUSTED" in err:
-                # Extract retry delay from error if available, else wait 5s
-                wait = 5
-                import re
-                match = re.search(r"retryDelay.*?(\d+)s", err)
-                if match:
-                    wait = min(int(match.group(1)), 15)  # cap at 15s
-                if attempt < 2:
-                    time.sleep(wait)
-                    continue
-            raise  # re-raise on non-rate-limit errors or after 3 attempts
+    # Strip markdown code fences if model wraps the JSON
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+    data = json.loads(raw)
+    return AgentAction(
+        type=data.get("type", "refuse"),
+        tool_name=data.get("tool_name"),
+        input=data.get("input"),
+        reasoning=data.get("reasoning", ""),
+    )
 
 
 # ── Fallback rule-based routing (used if Gemini call fails) ───────────────────
-REFUSE_PATTERNS   = ["should i invest", "which stock should", "buy or sell", "investment advice", "recommend a stock"]
+REFUSE_PATTERNS = [
+    "should i invest", "which stock should i", "buy or sell", "investment advice",
+    "recommend a stock", "should i buy", "should i sell", "will the stock go up",
+    "price prediction", "stock forecast", "which company to invest"
+]
 DIRECT_PATTERNS   = ["what is 2+2", "what is 2 + 2", "hello", "hi there"]
-WEB_KEYWORDS      = ["current", "today", "latest", "recent", "last week", "now", "stock price", "share price", "news", "ceo", "cfo", "right now", "2025"]
+WEB_KEYWORDS      = ["current", "today", "latest", "recent", "last week", "now", "stock price", "share price", "news", "ceo", "cfo", "right now", "2025", "stocks", "stock", "share", "market cap", "nse", "bse"]
 DATA_KEYWORDS     = ["revenue", "profit", "margin", "eps", "earnings per share", "headcount", "employees", "fy2", "how much", "how many", "compare", "growth", "financial", "figures"]
 DOCS_KEYWORDS     = ["why", "reason", "explain", "strategy", "strategic", "priority", "management", "commentary", "said", "highlight", "drove", "driven", "cause", "attributed", "approach", "plan", "outlook"]
 
@@ -189,30 +174,26 @@ def _rule_based_fallback(question: str, context: list[dict]) -> AgentAction:
     if any(kw in q for kw in DOCS_KEYWORDS):
         return AgentAction(type="tool", tool_name="search_docs", input=question, reasoning="Qualitative/explanation keywords detected.")
 
-    return AgentAction(type="tool", tool_name="search_docs", input=question, reasoning="No clear signal — defaulting to search_docs.")
+    return AgentAction(type="refuse", reasoning="No domain signal detected — refusing.")
 
 
 def decide_next_action(question: str, context: list[dict]) -> AgentAction:
     """
     Decide what the agent should do next.
 
-    Tries Gemini first. Falls back to rule-based routing on any error.
-    This design means the agent always works — even without an API key.
-
-    To swap LLM provider: replace _call_gemini() with your provider's call.
-    The AgentAction return type is the contract — nothing else changes.
+    Tries LLM providers in order (based on LLM_TYPE in .env).
+    Falls back to rule-based routing if all LLM providers fail.
+    This design means the agent always works — even without any API key.
     """
-    api_key = os.getenv("GEMINI_API_KEY")
+    from agent.llm import LLMUnavailableError
 
-    if api_key:
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY"):
         try:
             prompt = _build_prompt(question, context)
-            return _call_gemini(prompt)
+            return _call_llm(prompt)
+        except LLMUnavailableError:
+            print("[decision_engine] All LLM providers failed — using rule-based routing.")
         except Exception as e:
-            err = str(e)
-            if "429" in err or "RESOURCE_EXHAUSTED" in err:
-                print("[decision_engine] Gemini rate limit hit — using rule-based routing.")
-            else:
-                print(f"[decision_engine] Gemini error: {err[:120]} — falling back to rule-based routing.")
+            print(f"[decision_engine] LLM error: {str(e)[:120]} — falling back to rule-based routing.")
 
     return _rule_based_fallback(question, context)
