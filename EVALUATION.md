@@ -37,14 +37,11 @@ Special cases:
 A result is **fully correct** when `tool_routing_score = 1.0` AND `status_correct = True`.
 A result has **partial credit** when `0 < tool_routing_score < 1.0`.
 
-### Overall accuracy
-
-```
-accuracy = fully_correct / total
-```
-
-The evaluation also reports per-category average Jaccard score and a partial-credit count
-separately from fully-correct and fully-wrong results.
+The evaluation reports:
+- Per-question Jaccard score, actual tools called, and status
+- Per-category average Jaccard score and binary fully-correct count
+- Partial-credit count separately from fully-correct and fully-wrong
+- Per-tool telemetry summary (average latency, total calls, total estimated cost)
 
 ---
 
@@ -73,7 +70,7 @@ separately from fully-correct and fully-wrong results.
 | 19 | edge_case | Why why why why why why why why why why? | search_docs | answered |
 | 20 | edge_case | What is the latest news about Infosys and also their FY24 margin and also why did they grow? | web_search, query_data, search_docs | answered |
 
-> Run `python evaluate.py` to populate actual outputs and Jaccard scores.
+> Run `python evaluate.py` to populate actual outputs, Jaccard scores, and telemetry.
 
 ---
 
@@ -101,10 +98,10 @@ The rule-based path is a last-resort fallback only.
 financial topics and treat "stocks" as investment advice even when the question is purely
 informational.
 
-**Mitigation:** The system prompt now explicitly states that questions about stock prices,
+**Mitigation:** The system prompt explicitly states that questions about stock prices,
 financial data, and company performance are allowed. Only explicit buy/sell/invest advice
-triggers a refusal. The rule-based fallback also adds `stock`, `stocks`, `share`, `market cap`
-to `WEB_KEYWORDS` so they route to `web_search` rather than refusing.
+triggers a refusal. The rule-based fallback adds `stock`, `stocks`, `share`, `market cap`,
+`nse`, `bse` to `WEB_KEYWORDS` so they route to `web_search` rather than refusing.
 
 ---
 
@@ -126,11 +123,10 @@ relevance threshold should be added.
 **Trigger:** Questions requiring 3 tools + reflection (e.g. eval question 20).
 
 **Root cause:** Each tool call consumes one step. With `MAX_STEPS = 8`, a question requiring
-3 tools + 1 decision step + 1 synthesis step + 1 reflection step uses 6 steps, leaving little
-headroom.
+3 tools + 1 decision step + 1 synthesis step + 1 reflection step uses 6 steps.
 
-**Mitigation:** This is by design — the cap is a safety feature. The agent returns a
-`cap_reached` status with whatever partial information was collected.
+**Mitigation:** By design — the cap is a safety feature. The agent returns `cap_reached`
+with whatever partial information was collected. Rephrase into smaller sub-questions.
 
 ---
 
@@ -142,28 +138,15 @@ headroom.
 calls per question (planner + decision engine + synthesis + reflector).
 
 **Mitigation:** The response cache skips API calls for repeated questions. Switch `LLM_TYPE`
-between `GROQ` and `GEMINI` to spread load across providers. Groq's free tier has higher RPM.
-
----
-
-### Failure Mode 6: Reflection retry using wrong query
-
-**Trigger:** Reflector says answer is incomplete; retry action sends a bad query.
-
-**Root cause:** Earlier versions passed the reflector's `issue` string as the retry query,
-which could be a vague complaint or raw SQL. The LLM would then generate a nonsensical tool
-call.
-
-**Mitigation:** The retry now passes the original user question back to `decide_next_action`,
-ensuring the retry is grounded in the actual question rather than the critique text.
+between `GROQ` and `GEMINI` to spread load. Groq's free tier has higher RPM than Gemini.
 
 ---
 
 ## 5. Observations
 
 - The planning step (Bonus A) consistently produces accurate plans for single-tool questions
-  but sometimes over-specifies tools for simple questions (e.g. plans to call `query_data`
-  for a greeting). Short inputs (≤15 chars) now bypass the LLM planner entirely.
+  but sometimes over-specifies tools for simple questions. Short inputs (≤15 chars) now bypass
+  the LLM planner entirely and use rule-based planning.
 
 - The reflection step (Bonus C) is most useful when `search_docs` returns a mock chunk that
   doesn't actually answer the question. When real PDFs are ingested, reflection rarely triggers
@@ -176,3 +159,6 @@ ensuring the retry is grounded in the actual question rather than the critique t
 - The Groq provider (Llama 3.3 70B) is faster and has higher free-tier RPM than Gemini, but
   is more prone to over-refusing financial questions. Setting `LLM_TYPE=GROQ` with Gemini as
   fallback gives the best balance of speed and accuracy.
+
+- The response cache significantly reduces API usage on repeated evaluation runs. On the second
+  run of `evaluate.py`, all non-web-search questions are served from cache with zero API calls.
