@@ -14,7 +14,10 @@ __pycache__/
 *.pyc
 
 # Generated binary artifacts — reproducible via scripts
-data/
+data/docs/
+*.pkl
+*.db
+*.bin
 
 # Trace outputs — generated at runtime
 traces/
