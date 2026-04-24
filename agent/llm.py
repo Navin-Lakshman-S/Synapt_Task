@@ -27,6 +27,24 @@ class LLMUnavailableError(Exception):
     pass
 
 
+# ── Session-level provider blacklist ──────────────────────────────────────────
+# When a provider hits a rate limit (429), it's added here and skipped for the
+# rest of the process lifetime — no point retrying a quota-exhausted provider
+# on every single call.
+_blacklisted_providers: set[str] = set()
+
+
+def _blacklist(provider: str) -> None:
+    if provider not in _blacklisted_providers:
+        print(f"[llm] {provider} rate-limited — skipping for remainder of session.")
+        _blacklisted_providers.add(provider)
+
+
+def reset_blacklist() -> None:
+    """Clear the provider blacklist — call this if you want to retry rate-limited providers."""
+    _blacklisted_providers.clear()
+
+
 # ── Provider implementations ───────────────────────────────────────────────────
 
 def _call_gemini(prompt: str, temperature: float) -> str:
@@ -120,6 +138,9 @@ def call_llm(prompt: str, temperature: float = 0.1) -> str:
     errors = []
 
     for provider in providers:
+        if provider in _blacklisted_providers:
+            continue  # already rate-limited this session — skip immediately
+
         fn = PROVIDER_REGISTRY.get(provider)
         if fn is None:
             continue
@@ -133,9 +154,13 @@ def call_llm(prompt: str, temperature: float = 0.1) -> str:
             # Package not installed — skip silently, no point retrying
             errors.append((provider, str(e)[:80]))
         except Exception as e:
-            err_msg = str(e)[:100]
-            errors.append((provider, err_msg))
-            print(f"[llm] {provider} failed: {err_msg} — trying next provider.")
+            err_msg = str(e)
+            # Rate limit — blacklist this provider for the session
+            if "429" in err_msg or "rate limit" in err_msg.lower() or "rate_limit" in err_msg.lower():
+                _blacklist(provider)
+            else:
+                print(f"[llm] {provider} failed: {err_msg[:100]} — trying next provider.")
+            errors.append((provider, err_msg[:100]))
 
     raise LLMUnavailableError(
         f"All LLM providers failed: {[(p, e) for p, e in errors]}"

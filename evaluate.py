@@ -92,8 +92,8 @@ EVAL_SET = [
      "notes": "Vague/broad question — agent should handle gracefully"},
     {"id": 19, "category": "edge_case",
      "question": "Why why why why why why why why why why?",
-     "expected_tools": ["search_docs"], "expected_status": "answered",
-     "notes": "Ambiguous — tests fallback routing"},
+     "expected_tools": [], "expected_status": "refused",
+     "notes": "Ambiguous nonsense — no domain signal, agent should refuse"},
     {"id": 20, "category": "edge_case",
      "question": "What is the latest news about Infosys and also their FY24 margin and also why did they grow?",
      "expected_tools": ["web_search", "query_data", "search_docs"], "expected_status": "answered",
@@ -186,8 +186,33 @@ def run_evaluation():
         category_scores[item["category"]].append(tool_score)
 
         icon = "✓" if overall_correct else ("~" if partial_credit else "✗")
-        print(f"  {icon} Status: {actual_status} | Tools: {actual_tools} | "
-              f"Jaccard: {tool_score:.2f} | Steps: {trace_dict['steps_used']}")
+        divider = "-" * 60
+        print(f"\n{divider}")
+        print(f"[{item['id']:02d}] {icon} {item['category'].upper()} | Jaccard: {tool_score:.2f} | Steps: {trace_dict['steps_used']} / 8 max")
+        print(f"Question:     {item['question']}")
+
+        # Print each step in the required trace format
+        for step in trace_dict["trace"]:
+            if step["action_type"] == "tool":
+                output_preview = str(step.get("output", ""))[:200]
+                if len(str(step.get("output", ""))) > 200:
+                    output_preview += "... [truncated]"
+                sources = ", ".join(step.get("sources", []))
+                print(f"Step {step['step']}:       tool={step['tool_name']}  input='{step['input']}'")
+                print(f"              result={output_preview}")
+                if sources:
+                    print(f"              sources={sources}")
+            elif step["action_type"] == "final":
+                print(f"Step {step['step']}:       [compose final answer]  reasoning='{step['reasoning']}'")
+            elif step["action_type"] == "refuse":
+                print(f"Step {step['step']}:       [REFUSE]  reasoning='{step['reasoning']}'")
+
+        print(f"Final Answer: {actual_final_answer[:300]}{'...' if len(actual_final_answer) > 300 else ''}")
+        citations = trace_dict.get("citations", [])
+        if citations:
+            print(f"Citations:    {' | '.join(citations[:3])}")
+        print(f"Status:       {actual_status.upper()}  (expected: {item['expected_status'].upper()})")
+        print(divider)
 
     # ── Summary ────────────────────────────────────────────────────────────────
     total   = len(results)
