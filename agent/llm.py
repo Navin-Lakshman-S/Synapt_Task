@@ -98,6 +98,7 @@ def _call_groq(prompt: str, temperature: float) -> str:
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
+        timeout=15,  # 15s timeout
     )
     return response.choices[0].message.content.strip()
 
@@ -155,8 +156,17 @@ def call_llm(prompt: str, temperature: float = 0.1) -> str:
             errors.append((provider, str(e)[:80]))
         except Exception as e:
             err_msg = str(e)
-            # Rate limit — blacklist this provider for the session
-            if "429" in err_msg or "rate limit" in err_msg.lower() or "rate_limit" in err_msg.lower():
+            # Rate limit, service unavailable, or invalid key — blacklist for this session
+            if (
+                "429" in err_msg
+                or "503" in err_msg
+                or "rate limit" in err_msg.lower()
+                or "rate_limit" in err_msg.lower()
+                or "401" in err_msg
+                or "invalid api key" in err_msg.lower()
+                or "invalid_api_key" in err_msg.lower()
+                or "authentication" in err_msg.lower()
+            ):
                 _blacklist(provider)
             else:
                 print(f"[llm] {provider} failed: {err_msg[:100]} — trying next provider.")
