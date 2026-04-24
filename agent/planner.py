@@ -23,12 +23,6 @@ REFUSE_PATTERNS = [
     "price prediction", "stock forecast", "which company to invest"
 ]
 
-TOOL_DESCRIPTIONS = (
-    "- search_docs: semantic search over annual report PDFs for qualitative info\n"
-    "- query_data: SQL queries over structured financial data (numbers, trends)\n"
-    "- web_search: live web search for recent/current information"
-)
-
 
 def generate_plan(question: str) -> str:
     """
@@ -56,13 +50,21 @@ def generate_plan(question: str) -> str:
 def _gemini_plan(question: str) -> str:
     """Ask the LLM to write a short tool-use plan for the question."""
     from agent.llm import call_llm
+    from agent.decision_engine import SYSTEM_PROMPT, TOOL_SCHEMAS
+
+    tool_descriptions = "\n".join(
+        f"- {t['name']}: {t['description']}" for t in TOOL_SCHEMAS
+    )
+    system_context = SYSTEM_PROMPT.format(tool_descriptions=tool_descriptions)
 
     prompt = (
-        f"You are planning how to answer a question using these tools:\n"
-        f"{TOOL_DESCRIPTIONS}\n\n"
-        f"Question: {question}\n\n"
-        f"Write a plan of 1-3 sentences describing which tool(s) you will call "
-        f"and why. Be specific. Do not answer the question itself."
+        f"{system_context}\n\n"
+        f"Before taking any action, write a plan of 1-3 sentences describing "
+        f"which tool(s) you intend to call for the following question and why. "
+        f"If the question should be refused (investment advice, out of scope), "
+        f"state that you will refuse without calling any tool. "
+        f"Do not answer the question itself.\n\n"
+        f"Question: {question}\n\nPlan:"
     )
     return call_llm(prompt, temperature=0.1)
 
