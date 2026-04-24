@@ -64,6 +64,9 @@ MOCK_CHUNKS = [
 
 
 def search_docs(query: str, top_k: int = 3) -> ToolResult:
+    # Degraded mode: simulate reduced corpus by cutting retrieval to 1 chunk
+    if os.getenv("DEGRADED_MODE") == "1":
+        top_k = 1
     """
     Semantic search over annual report PDFs.
 

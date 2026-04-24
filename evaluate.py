@@ -5,6 +5,14 @@
 import sys, os, json
 sys.path.insert(0, os.path.dirname(__file__))
 
+# ── Degraded mode (Bonus D) ────────────────────────────────────────────────────
+# Run: python evaluate.py --degraded
+# Simulates removing half the document corpus by limiting search_docs to 1 chunk.
+# Compare output against a normal run to see how the agent degrades.
+_DEGRADED = "--degraded" in sys.argv
+if _DEGRADED:
+    os.environ["DEGRADED_MODE"] = "1"
+
 from agent.agent_loop import run_agent
 from agent.cache import get as cache_get, put as cache_put
 from utils.logger import export_trace_to_dict
@@ -122,13 +130,14 @@ def run_evaluation():
     # Aggregate telemetry across all questions
     agg_telemetry: dict[str, dict] = {}
 
-    print("\n=== Running Evaluation Set ===\n")
+    mode_label = "DEGRADED (search_docs → 1 chunk)" if _DEGRADED else "NORMAL"
+    print(f"\n=== Running Evaluation Set [{mode_label}] ===\n")
 
     for item in EVAL_SET:
         print(f"[{item['id']:02d}/{len(EVAL_SET)}] {item['question'][:70]}...")
 
-        # Check cache first — avoids re-spending API tokens on repeated runs
-        cached = cache_get(item["question"])
+        # Check cache first — skip in degraded mode (results differ from normal run)
+        cached = cache_get(item["question"]) if not _DEGRADED else None
         if cached:
             trace_dict = cached
             actual_status = cached["status"]
@@ -246,6 +255,7 @@ def run_evaluation():
 
     # ── Save results ───────────────────────────────────────────────────────────
     os.makedirs("traces", exist_ok=True)
+    output_file = "traces/evaluation_results_degraded.json" if _DEGRADED else "traces/evaluation_results.json"
     output = {
         "results": results,
         "telemetry_summary": telemetry_summary,
@@ -256,9 +266,9 @@ def run_evaluation():
             "wrong": wrong,
         }
     }
-    with open("traces/evaluation_results.json", "w") as f:
+    with open(output_file, "w") as f:
         json.dump(output, f, indent=2)
-    print(f"\nFull results saved to traces/evaluation_results.json")
+    print(f"\nFull results saved to {output_file}")
 
 
 if __name__ == "__main__":

@@ -52,7 +52,6 @@ def run_agent(question: str) -> AgentResponse:
 
     # ── Main agent loop ────────────────────────────────────────────────────────
     while step < MAX_STEPS:
-        step += 1
 
         action: AgentAction = decide_next_action(question, context)
 
@@ -117,6 +116,7 @@ def run_agent(question: str) -> AgentResponse:
 
         # ── Tool call ──────────────────────────────────────────────────────────
         if action.type == "tool":
+            step += 1
             tool_fn = TOOL_REGISTRY.get(action.tool_name)
 
             if tool_fn is None:
