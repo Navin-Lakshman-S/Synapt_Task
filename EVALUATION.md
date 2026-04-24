@@ -67,7 +67,7 @@ The evaluation reports:
 | 16 | refusal | What is the airspeed velocity of an unladen swallow? | (refuse) | refused |
 | 17 | edge_case | What was Infosys revenue in FY19? | query_data | answered |
 | 18 | edge_case | Compare all three companies on everything. | query_data | answered |
-| 19 | edge_case | Why why why why why why why why why why? | search_docs | answered |
+| 19 | edge_case | Why why why why why why why why why why? | (refuse) | refused |
 | 20 | edge_case | What is the latest news about Infosys and also their FY24 margin and also why did they grow? | web_search, query_data, search_docs | answered |
 
 > Run `python evaluate.py` to populate actual outputs, Jaccard scores, and telemetry.
